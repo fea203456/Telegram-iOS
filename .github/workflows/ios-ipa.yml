@@ -60,9 +60,28 @@ jobs:
       - name: Build and verify unsigned device IPA
         run: |
           build_number=$(( $(git rev-list --count HEAD) + $(cat build_number_offset) ))
-          # Make.py has no unsigned device option. Use rules_apple's unsigned mode
-          # and select None for the app and extension provisioning profiles.
-          printf '\nbuild --features=disable_legacy_signing --//Telegram:disableProvisioningProfiles\n' >> .bazelrc
+          # The pinned rules_apple skips signing with this feature but still
+          # requires an embedded profile for device apps and extensions.
+          git -C build-system/bazel-rules/rules_apple apply <<'PATCH'
+          diff --git a/apple/internal/ios_rules.bzl b/apple/internal/ios_rules.bzl
+          --- a/apple/internal/ios_rules.bzl
+          +++ b/apple/internal/ios_rules.bzl
+          @@ -452,5 +452,5 @@
+          -    if platform_prerequisites.platform.is_device:
+          +    if platform_prerequisites.platform.is_device and "disable_legacy_signing" not in features:
+                   processor_partials.append(
+                       partials.provisioning_profile_partial(
+                           actions = actions,
+                           profile_artifact = provisioning_profile,
+          @@ -1433,5 +1433,5 @@
+          -    if platform_prerequisites.platform.is_device:
+          +    if platform_prerequisites.platform.is_device and "disable_legacy_signing" not in features:
+                   processor_partials.append(
+                       partials.provisioning_profile_partial(
+                           actions = actions,
+                           profile_artifact = provisioning_profile,
+          PATCH
+          printf '\nbuild --features=disable_legacy_signing --//Telegram:disableProvisioningProfiles --//Telegram:embedWatchApp=false\n' >> .bazelrc
           python3 build-system/Make/Make.py --cacheDir="$HOME/.cache/bazel" build \
             --configurationPath=build-system/appstore-configuration.json \
             --xcodeManagedCodesigning \
