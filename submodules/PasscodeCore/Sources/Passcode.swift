@@ -10,12 +10,12 @@ public struct PasscodeConfiguration: Equatable, Sendable {
         case appExtension
     }
 
-    public let appGroupIdentifier: String
+    public let appGroupIdentifier: String?
     public let processRole: ProcessRole
     public let biometricKeychainService: String?
     public let keychainScope: String?
 
-    public init(appGroupIdentifier: String, processRole: ProcessRole, biometricKeychainService: String? = nil, keychainScope: String? = nil) {
+    public init(appGroupIdentifier: String?, processRole: ProcessRole, biometricKeychainService: String? = nil, keychainScope: String? = nil) {
         self.appGroupIdentifier = appGroupIdentifier
         self.processRole = processRole
         self.biometricKeychainService = biometricKeychainService
@@ -38,20 +38,29 @@ public final class PasscodeEnvironment: @unchecked Sendable {
     public func configure(_ configuration: PasscodeConfiguration, privateAccessGroup: (() -> String?)? = nil) throws {
         self.mutex.lock()
         defer { self.mutex.unlock() }
-        #if os(macOS)
-        guard !configuration.appGroupIdentifier.isEmpty, configuration.appGroupIdentifier.contains(".") else {
+        if let group = configuration.appGroupIdentifier {
+            #if os(macOS)
+            guard !group.isEmpty, group.contains(".") else { throw PasscodeError.unavailable }
+            #else
+            guard group.hasPrefix("group."), group.count > "group.".count else { throw PasscodeError.unavailable }
+            #endif
+        } else {
+            #if os(macOS)
             throw PasscodeError.unavailable
+            #else
+            guard configuration.processRole == .mainApp,
+                  let scope = configuration.keychainScope, !scope.isEmpty else {
+                throw PasscodeError.unavailable
+            }
+            #endif
         }
-        #else
-        guard configuration.appGroupIdentifier.hasPrefix("group."), configuration.appGroupIdentifier.count > "group.".count else {
-            throw PasscodeError.unavailable
-        }
-        #endif
         if let current = self.configuration {
             guard current == configuration else { throw PasscodeError.unavailable }
             return
         }
-        guard configuration.processRole != .mainApp || privateAccessGroup != nil else { throw PasscodeError.unavailable }
+        guard configuration.processRole != .mainApp || configuration.appGroupIdentifier == nil || privateAccessGroup != nil else {
+            throw PasscodeError.unavailable
+        }
         self.configuration = configuration
         self.resolvePrivateAccessGroup = privateAccessGroup
     }
@@ -69,7 +78,7 @@ public final class PasscodeEnvironment: @unchecked Sendable {
         return self.configuration?.processRole == .mainApp
     }
 
-    public func sharedAccessGroup() throws -> String {
+    public func sharedAccessGroup() throws -> String? {
         self.mutex.lock()
         defer { self.mutex.unlock() }
         guard let configuration = self.configuration else { throw PasscodeError.unavailable }
@@ -86,17 +95,20 @@ public final class PasscodeEnvironment: @unchecked Sendable {
         return service
     }
 
-    public func privateAccessGroup() throws -> String {
+    public func privateAccessGroup() throws -> String? {
         self.mutex.lock()
         defer { self.mutex.unlock() }
         guard let configuration = self.configuration, configuration.processRole == .mainApp else { throw PasscodeError.unavailable }
+        #if !os(macOS)
+        guard let appGroup = configuration.appGroupIdentifier else { return nil }
+        #endif
         if let group = self.resolvedPrivateAccessGroup { return group }
         guard let group = self.resolvePrivateAccessGroup?(), !group.isEmpty else {
             throw PasscodeError.unavailable
         }
         #if !os(macOS)
         guard !group.hasPrefix("group."),
-              group.hasSuffix("." + configuration.appGroupIdentifier.dropFirst("group.".count)) else {
+              group.hasSuffix("." + appGroup.dropFirst("group.".count)) else {
             throw PasscodeError.unavailable
         }
         #endif
@@ -131,11 +143,7 @@ final class PasscodeKeychain: PasscodeStorage {
 
     private func service(_ account: String) throws -> String {
         let service = try account.hasPrefix("biometric.") ? self.environment.biometricKeychainService() : "org.telegram.passcode.v1"
-        #if os(macOS)
         return PasscodeKeychainScope.service(service, environment: self.environment)
-        #else
-        return service
-        #endif
     }
 
     func read(_ account: String, context: LAContext? = nil) throws -> Data? {

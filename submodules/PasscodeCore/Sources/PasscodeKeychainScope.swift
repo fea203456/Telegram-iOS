@@ -1,14 +1,23 @@
-#if os(macOS)
 import Foundation
+#if os(macOS)
 import Security
+#endif
 
-/// Keeps a channel's keychain items apart from the other channels' on macOS. Release channels share the
-/// unscoped names; a scoped channel (Debug builds) stores its passcode, biometric and wallet items under
+/// Keeps Keychain items for independent data stores apart. A scoped installation stores its items under
 /// `org.telegram.scoped.<scope>/<name>`, which no unscoped name filter matches, so it neither prompts for nor
-/// resets the other channels' items. `migrateLegacyItems` copies the items the scoped build can read without a
-/// prompt from the unscoped names once, before anything reads the scope.
+/// resets the other data store's items.
 @available(macOS 10.15, *)
 public enum PasscodeKeychainScope {
+    private static let root = "org.telegram.scoped."
+
+    public static func service(_ service: String, environment: PasscodeEnvironment = .shared) -> String {
+        guard let scope = environment.keychainScope else {
+            return service
+        }
+        return Self.root + scope + "/" + service
+    }
+
+    #if os(macOS)
     public enum Migration: Equatable {
         case migrated(Int)
         case nothingToMigrate
@@ -33,18 +42,10 @@ public enum PasscodeKeychainScope {
 
     public static let legacyPasscodeService = "org.telegram.passcode.v1"
 
-    private static let root = "org.telegram.scoped."
     private static let interactionLock = NSLock()
 
     static var system: Keychain {
         return Keychain(isUnlocked: isDefaultKeychainUnlocked, read: readWithoutInteraction, listGenericPasswords: listGenericPasswords, add: addIfMissing)
-    }
-
-    public static func service(_ service: String, environment: PasscodeEnvironment = .shared) -> String {
-        guard let scope = environment.keychainScope else {
-            return service
-        }
-        return Self.root + scope + "/" + service
     }
 
     /// Copies the passcode credential, the device secret and the wallet items that this build can read without
@@ -262,5 +263,5 @@ public enum PasscodeKeychainScope {
         }
         return status & SecKeychainStatus(kSecUnlockStateStatus) != 0
     }
+    #endif
 }
-#endif

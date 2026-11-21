@@ -66,11 +66,11 @@ enum WalletVault {
 
     static func service(namespace: String) -> String { self.envelopeServicePrefix + namespace }
 
-    static func keychainAccessGroup() throws -> String? {
+    static func keychainAccessGroup(environment: PasscodeEnvironment = .shared) throws -> String? {
         #if os(macOS)
         return nil
         #else
-        return try PasscodeEnvironment.shared.privateAccessGroup()
+        return try environment.privateAccessGroup()
         #endif
     }
 
@@ -96,11 +96,7 @@ enum WalletVault {
     static let unscopedServicePrefix = "org.telegram.ton-wallet."
 
     static func servicePrefix(environment: PasscodeEnvironment) -> String {
-        #if os(macOS)
         return PasscodeKeychainScope.service(self.unscopedServicePrefix, environment: environment)
-        #else
-        return self.unscopedServicePrefix
-        #endif
     }
 
     static func removeAll(environment: PasscodeEnvironment = .shared) throws {
@@ -112,7 +108,7 @@ enum WalletVault {
     }
 
     static func removeAll(environment: PasscodeEnvironment, readAttributes: ([String: Any]) -> (OSStatus, CFTypeRef?), delete: ([String: Any]) -> OSStatus) throws {
-        let group = try self.keychainAccessGroup()
+        let group = try self.keychainAccessGroup(environment: environment)
         var query: [String: Any] = [kSecClass as String: kSecClassGenericPassword,
             kSecReturnAttributes as String: true, kSecMatchLimit as String: kSecMatchLimitAll,
             kSecAttrSynchronizable as String: false]

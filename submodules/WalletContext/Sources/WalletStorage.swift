@@ -118,11 +118,7 @@ actor WalletEngineStorage {
     }
 
     private static func scoped(_ service: String) -> String {
-        #if os(macOS)
         return PasscodeKeychainScope.service(service)
-        #else
-        return service
-        #endif
     }
 
     func loadDescriptor() throws -> WalletEngineDescriptorRecord? {
