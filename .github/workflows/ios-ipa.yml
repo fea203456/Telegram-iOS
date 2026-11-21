@@ -1,0 +1,94 @@
+name: Unsigned iOS IPA
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    # The macos-14 and macos-15 images do not carry the Xcode 27.1 pin.
+    runs-on: xcode-27
+    timeout-minutes: 180
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Select Xcode and reclaim disk space
+        id: xcode
+        run: |
+          version=$(python3 -c 'import json; print(json.load(open("versions.json"))["xcode"])')
+          selected="/Applications/Xcode_${version}.app"
+          if [[ ! -d "$selected/Contents/Developer" ]]; then
+            echo "::error::Xcode $version is required by versions.json but is missing from the runner."
+            exit 1
+          fi
+          sudo xcode-select --switch "$selected/Contents/Developer"
+          xcodebuild -version
+          echo "build=$(xcodebuild -version | awk '/^Build version / { print $3 }')" >> "$GITHUB_OUTPUT"
+
+          df -h "$RUNNER_TEMP"
+          xcrun simctl runtime delete all || echo "::warning::Some simulator runtimes could not be removed."
+          for xcode in /Applications/Xcode*.app; do
+            if [[ -d "$xcode" && ! -L "$xcode" && ! "$xcode" -ef "$selected" ]]; then
+              sudo rm -rf -- "$xcode"
+            fi
+          done
+          xcrun --sdk iphoneos --show-sdk-path
+          df -h "$RUNNER_TEMP"
+
+      - name: Check out pinned submodules
+        run: |
+          # The fork-relative tgcalls URL is unavailable. The upstream serves the pinned commit.
+          git -c submodule.submodules/TgVoipWebrtc/tgcalls.url=https://github.com/TelegramMessenger/tgcalls.git \
+            submodule update --init --recursive --depth 1 --jobs 4
+
+      - name: Cache Bazel build outputs
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/bazel
+          key: ios-ipa-${{ runner.arch }}-${{ steps.xcode.outputs.build }}-${{ hashFiles('versions.json', 'MODULE.bazel*', '.bazelrc') }}-${{ github.sha }}
+          restore-keys: |
+            ios-ipa-${{ runner.arch }}-${{ steps.xcode.outputs.build }}-${{ hashFiles('versions.json', 'MODULE.bazel*', '.bazelrc') }}-
+
+      - name: Build and verify unsigned device IPA
+        run: |
+          build_number=$(( $(git rev-list --count HEAD) + $(cat build_number_offset) ))
+          # Make.py has no unsigned device option. Use rules_apple's unsigned mode
+          # and select None for the app and extension provisioning profiles.
+          printf '\nbuild --features=disable_legacy_signing --//Telegram:disableProvisioningProfiles\n' >> .bazelrc
+          python3 build-system/Make/Make.py --cacheDir="$HOME/.cache/bazel" build \
+            --configurationPath=build-system/appstore-configuration.json \
+            --xcodeManagedCodesigning \
+            --buildNumber="$build_number" \
+            --configuration=release_arm64
+
+          ipa="$RUNNER_TEMP/Telegram.ipa"
+          cp bazel-bin/Telegram/Telegram.ipa "$ipa"
+          python3 - "$ipa" <<'PY'
+          import sys
+          import zipfile
+
+          with zipfile.ZipFile(sys.argv[1]) as ipa:
+              if ipa.testzip() is not None:
+                  sys.exit("IPA failed ZIP integrity verification")
+              names = ipa.namelist()
+              if "Payload/Telegram.app/Telegram" not in names:
+                  sys.exit("IPA is missing the Telegram executable")
+              if any(name.endswith(("/embedded.mobileprovision", "/_CodeSignature/CodeResources")) for name in names):
+                  sys.exit("IPA contains a provisioning profile or bundle signature")
+          PY
+
+      - name: Upload Telegram.ipa
+        uses: actions/upload-artifact@v4
+        with:
+          name: Telegram-unsigned-ios
+          path: ${{ runner.temp }}/Telegram.ipa
+          if-no-files-found: error
+          compression-level: 0
