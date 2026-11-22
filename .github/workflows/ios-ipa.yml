@@ -58,6 +58,7 @@ jobs:
             ios-ipa-${{ runner.arch }}-${{ steps.xcode.outputs.build }}-${{ hashFiles('versions.json', 'MODULE.bazel*', '.bazelrc') }}-
 
       - name: Build and verify unsigned device IPA
+        shell: bash
         run: |
           build_number=$(( $(git rev-list --count HEAD) + $(cat build_number_offset) ))
           # The pinned rules_apple skips signing with this feature but still
