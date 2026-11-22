@@ -85,7 +85,7 @@ func infoItems(
     let isSelf = data.peer?.id == context.account.peerId
     if mod.showPeerIdAndDC, let peer = data.peer {
         items[.modDetails]!.append(PeerInfoScreenInfoItem(id: "mod-peer-id", title: "ID и DC",
-            text: .plain("ID: \(peer.id.toInt64()) · DC подключения: \(context.account.masterDatacenterId)"), linkAction: nil))
+            text: .plain("ID: \(peer.id.toInt64()) · DC подключения: \(context.account.network.datacenterId)"), linkAction: nil))
     }
     if isSelf && !mod.usernames.isEmpty {
         items[.modDetails]!.append(PeerInfoScreenInfoItem(id: "mod-usernames", title: "Коллекционные юзернеймы",
