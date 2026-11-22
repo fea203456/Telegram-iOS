@@ -7257,6 +7257,7 @@ public class GiftViewScreen: ViewControllerComponentContainer {
                         peerId: context.account.peerId,
                         theme: context.sharedContext.currentPresentationData.with { $0 }.theme,
                         currency: self.balanceCurrency,
+                        usesModBalance: true,
                         action: { [weak self] in
                             guard let self, let starsContext = context.starsContext, let navigationController = self.navigationController as? NavigationController else {
                                 return

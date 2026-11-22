@@ -1,3 +1,5 @@
+import ModCore
+import ModSettingsUI
 import Foundation
 import UIKit
 import Display
@@ -257,6 +259,16 @@ public final class GiftStoreContentComponent: Component {
                                     effectAlignment: .center,
                                     action: { [weak self] in
                                         guard let self, let component = self.component else {
+                                            return
+                                        }
+                                        let mod = ModSettings.shared.settings(account: component.context.account.id.int64)
+                                        if mod.fakeGifts && mod.showAllGifts {
+                                            if let controller = controller() {
+                                                let stars = uniqueGift.resellAmounts?.first(where: { $0.currency == .stars })
+                                                let price = stars ?? uniqueGift.resellAmounts?.first(where: { $0.currency == .ton })
+                                                presentModGiftPurchase(on: controller, context: component.context, title: uniqueGift.title,
+                                                    price: price?.amount.value ?? 0, currency: price?.currency == .ton ? .gram : .stars)
+                                            }
                                             return
                                         }
                                         if component.confirmPurchaseImmediately, let starsTopUpOptions = component.starsTopUpOptions {
@@ -1273,7 +1285,8 @@ final class GiftStoreScreenComponent: Component {
                 return
             }
             let tonBalance = tonContext.currentState?.balance.value ?? 0
-            if tonBalance == 0 {
+            let mod = ModSettings.shared.settings(account: component.context.account.id.int64)
+            if tonBalance == 0 && mod.displayedGram == nil {
                 let starsController = component.context.sharedContext.makeStarsTransactionsScreen(context: component.context, starsContext: starsContext)
                 controller.push(starsController)
                 return
@@ -1297,7 +1310,7 @@ final class GiftStoreScreenComponent: Component {
                 
                 items.append(.action(ContextMenuActionItem(
                     text: presentationData.strings.Gift_Store_Balance_MyStars,
-                    textLayout: .secondLineWithValue(formatStarsAmountText(starsBalance, dateTimeFormat: presentationData.dateTimeFormat)),
+                    textLayout: .secondLineWithValue(mod.displayedStars ?? formatStarsAmountText(starsBalance, dateTimeFormat: presentationData.dateTimeFormat)),
                     icon: { theme in return generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Stars"), color: theme.contextMenu.primaryColor) },
                     action: { [weak self] _, f in
                         f(.dismissWithoutContent)
@@ -1313,7 +1326,7 @@ final class GiftStoreScreenComponent: Component {
                 
                 items.append(.action(ContextMenuActionItem(
                     text: presentationData.strings.Gift_Store_Balance_MyTon,
-                    textLayout: .secondLineWithValue(formatTonAmountText(tonBalance, dateTimeFormat: presentationData.dateTimeFormat)),
+                    textLayout: .secondLineWithValue(mod.displayedGram ?? formatTonAmountText(tonBalance, dateTimeFormat: presentationData.dateTimeFormat)),
                     icon: { theme in return generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Ton"), color: theme.contextMenu.primaryColor) },
                     action: { [weak self] _, f in
                         f(.dismissWithoutContent)

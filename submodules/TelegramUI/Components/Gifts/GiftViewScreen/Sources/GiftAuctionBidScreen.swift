@@ -1954,6 +1954,7 @@ private final class GiftAuctionBidScreenComponent: Component {
                         peerId: component.context.account.peerId,
                         theme: environment.theme,
                         currency: .stars,
+                        usesModBalance: true,
                         action: { [weak self] in
                             guard let self, let starsContext = context.starsContext, let navigationController = self.environment?.controller()?.navigationController as? NavigationController else {
                                 return

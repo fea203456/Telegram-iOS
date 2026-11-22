@@ -1,3 +1,4 @@
+import ModCore
 import Foundation
 import UIKit
 import Display
@@ -220,6 +221,8 @@ final class StarsTransactionsScreenComponent: Component {
             fatalError("init(coder:) has not been implemented")
         }
         
+        private var modSettingsObserver: ModSettingsObservation?
+
         deinit {
             self.stateDisposable?.dispose()
             self.revenueStateDisposable?.dispose()
@@ -380,6 +383,11 @@ final class StarsTransactionsScreenComponent: Component {
             
             self.component = component
             self.state = state
+            if self.modSettingsObserver == nil {
+                self.modSettingsObserver = ModSettingsObservation { [weak self] in
+                    Queue.mainQueue().async { [weak self] in self?.state?.updated() }
+                }
+            }
             
             var balanceUpdated = false
             if let starsState = self.starsState {
@@ -606,11 +614,14 @@ final class StarsTransactionsScreenComponent: Component {
                 containerSize: CGSize(width: 120.0, height: 100.0)
             )
             
+            let mod = ModSettings.shared.settings(account: component.context.account.id.int64)
             let formattedBalance: String
             if component.starsContext.ton {
-                formattedBalance = formatTonAmountText(self.starsState?.balance.value ?? 0, dateTimeFormat: environment.dateTimeFormat)
+                let display = component.context.tonContext === component.starsContext ? mod.displayedGram : nil
+                formattedBalance = display ?? formatTonAmountText(self.starsState?.balance.value ?? 0, dateTimeFormat: environment.dateTimeFormat)
             } else {
-                formattedBalance = formatStarsAmountText(self.starsState?.balance ?? StarsAmount.zero, dateTimeFormat: environment.dateTimeFormat)
+                let display = component.context.starsContext === component.starsContext ? mod.displayedStars : nil
+                formattedBalance = display ?? formatStarsAmountText(self.starsState?.balance ?? StarsAmount.zero, dateTimeFormat: environment.dateTimeFormat)
             }
             let smallLabelFont = Font.regular(11.0)
             let labelFont = Font.semibold(14.0)

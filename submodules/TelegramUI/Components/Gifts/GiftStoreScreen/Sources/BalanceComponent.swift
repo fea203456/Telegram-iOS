@@ -1,3 +1,4 @@
+import ModCore
 import Foundation
 import UIKit
 import Display
@@ -43,11 +44,15 @@ final class BalanceComponent: Component {
         private var starsBalance: Int64 = 0
         private var tonBalance: Int64 = 0
         private var balanceDisposable: Disposable?
+        private var modSettingsObserver: ModSettingsObservation?
                         
         override public init(frame: CGRect) {
             super.init(frame: frame)
             
             self.addTarget(self, action: #selector(self.pressed), for: .touchUpInside)
+            self.modSettingsObserver = ModSettingsObservation { [weak self] in
+                Queue.mainQueue().async { [weak self] in self?.componentState?.updated() }
+            }
         }
         
         required public init?(coder: NSCoder) {
@@ -94,10 +99,13 @@ final class BalanceComponent: Component {
             
             let presentationData = component.context.sharedContext.currentPresentationData.with { $0 }
 
+            let mod = ModSettings.shared.settings(account: component.context.account.id.int64)
+            let stars = mod.displayedStars ?? presentationStringsFormattedNumber(Int32(clamping: self.starsBalance), presentationData.dateTimeFormat.groupingSeparator)
             var rawString: String = ""
-            let starsBalanceString = "**⭐️\(presentationStringsFormattedNumber(Int32(clamping: self.starsBalance), presentationData.dateTimeFormat.groupingSeparator))**"
-            if self.tonBalance > 0 {
-                let tonBalanceString = "**💎\(formatTonAmountText(self.tonBalance, dateTimeFormat: presentationData.dateTimeFormat))**"
+            let starsBalanceString = "**⭐️\(stars)**"
+            if mod.displayedGram != nil || self.tonBalance > 0 {
+                let ton = mod.displayedGram ?? formatTonAmountText(self.tonBalance, dateTimeFormat: presentationData.dateTimeFormat)
+                let tonBalanceString = "**💎\(ton)**"
                 rawString = starsBalanceString + "\n" + tonBalanceString
             } else {
                 rawString = presentationData.strings.Stars_Purchase_Balance + "\n" + starsBalanceString

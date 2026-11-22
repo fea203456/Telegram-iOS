@@ -5,6 +5,7 @@ import AccountContext
 import SwiftSignalKit
 import TelegramCore
 import SettingsUI
+import ModSettingsUI
 import PeerInfoStoryGridScreen
 import CallListUI
 import ContactListUI
@@ -52,6 +53,8 @@ extension PeerInfoScreenNode {
             }
         }
         switch section {
+        case .mod:
+            self.controller?.push(modSettingsController(context: self.context))
         case .avatar:
             self.controller?.openAvatarForEditing()
         case .edit:

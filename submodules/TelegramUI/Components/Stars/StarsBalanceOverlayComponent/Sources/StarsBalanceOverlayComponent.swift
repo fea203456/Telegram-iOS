@@ -1,3 +1,4 @@
+import ModCore
 import Foundation
 import UIKit
 import Display
@@ -18,6 +19,7 @@ public final class StarsBalanceOverlayComponent: Component {
     private let peerId: EnginePeer.Id
     private let theme: PresentationTheme
     private let currency: CurrencyAmount.Currency
+    private let usesModBalance: Bool
     private let action: () -> Void
     
     public init(
@@ -25,12 +27,14 @@ public final class StarsBalanceOverlayComponent: Component {
         peerId: EnginePeer.Id,
         theme: PresentationTheme,
         currency: CurrencyAmount.Currency,
+        usesModBalance: Bool = false,
         action: @escaping () -> Void
     ) {
         self.context = context
         self.peerId = peerId
         self.theme = theme
         self.currency = currency
+        self.usesModBalance = usesModBalance
         self.action = action
     }
 
@@ -38,7 +42,7 @@ public final class StarsBalanceOverlayComponent: Component {
         if lhs.theme !== rhs.theme {
             return false
         }
-        if lhs.currency != rhs.currency {
+        if lhs.currency != rhs.currency || lhs.usesModBalance != rhs.usesModBalance {
             return false
         }
         return true
@@ -55,6 +59,7 @@ public final class StarsBalanceOverlayComponent: Component {
         private var starsBalance: Int64 = 0
         private var tonBalance: Int64 = 0
         private var balanceDisposable: Disposable?
+        private var modSettingsObserver: ModSettingsObservation?
         
         private var starsRevenueStatsContext: StarsRevenueStatsContext?
         
@@ -93,6 +98,11 @@ public final class StarsBalanceOverlayComponent: Component {
             let previousComponent = self.component
             self.component = component
             self.state = state
+            if component.usesModBalance && self.modSettingsObserver == nil {
+                self.modSettingsObserver = ModSettingsObservation { [weak self] in
+                    Queue.mainQueue().async { [weak self] in self?.state?.updated() }
+                }
+            }
             
             if self.balanceDisposable == nil {
                 if component.peerId == component.context.account.peerId {
@@ -137,12 +147,13 @@ public final class StarsBalanceOverlayComponent: Component {
             
             let rawString: String
             if component.peerId == component.context.account.peerId {
+                let mod = component.usesModBalance ? ModSettings.shared.settings(account: component.context.account.id.int64) : nil
                 let balanceString: String
                 switch component.currency {
                 case .stars:
-                    balanceString = "**⭐️\(balance)**"
+                    balanceString = "**⭐️\(mod?.displayedStars ?? balance)**"
                 case .ton:
-                    balanceString = "**💎\(formatTonAmountText(self.tonBalance, dateTimeFormat: presentationData.dateTimeFormat))**"
+                    balanceString = "**💎\(mod?.displayedGram ?? formatTonAmountText(self.tonBalance, dateTimeFormat: presentationData.dateTimeFormat))**"
                 }
                 rawString = presentationData.strings.StarsBalance_YourBalance(balanceString).string
             } else {

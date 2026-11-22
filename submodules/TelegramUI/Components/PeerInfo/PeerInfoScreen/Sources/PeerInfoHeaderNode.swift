@@ -1,3 +1,5 @@
+import ModCore
+import ModSettingsUI
 import Foundation
 import UIKit
 import AsyncDisplayKit
@@ -582,6 +584,7 @@ final class PeerInfoHeaderNode: ASDisplayNode {
     }
     
     private var currentCredibilityIcon: CredibilityIcon?
+    private var modBannerView: ModBannerView?
     private var currentVerifiedIcon: CredibilityIcon?
     private var currentStatusIcon: CredibilityIcon?
     
@@ -704,6 +707,8 @@ final class PeerInfoHeaderNode: ASDisplayNode {
         let themeUpdated = self.presentationData?.theme !== presentationData.theme
         self.presentationData = presentationData
         
+        let isSelf = peer?.id == self.context.account.peerId
+        let mod = isSelf ? ModSettings.shared.settings(account: self.context.account.id.int64) : nil
         let premiumConfiguration = PremiumConfiguration.with(appConfiguration: self.context.currentAppConfiguration.with { $0 })
         var credibilityIcon: CredibilityIcon = .none
         var verifiedIcon: CredibilityIcon = .none
@@ -717,7 +722,7 @@ final class PeerInfoHeaderNode: ASDisplayNode {
                 credibilityIcon = .scam
             } else if let emojiStatus = peer.emojiStatus {
                 statusIcon = .emojiStatus(emojiStatus)
-            } else if peer.isPremium && !premiumConfiguration.isPremiumDisabled && (peer.id != self.context.account.peerId || self.isSettings || self.isMyProfile) {
+            } else if ((peer.isPremium && !premiumConfiguration.isPremiumDisabled) || mod?.localPremium == true) && (!isSelf || self.isSettings || self.isMyProfile) {
                 credibilityIcon = .premium
             } else {
                 credibilityIcon = .none
@@ -730,6 +735,17 @@ final class PeerInfoHeaderNode: ASDisplayNode {
             }
         }
         
+        if let mod, mod.verified, !isMediaOnly, self.isSettings || self.isMyProfile {
+            switch mod.badge {
+            case .verified:
+                credibilityIcon = .verified
+            case .star:
+                credibilityIcon = .premium
+            case .mod:
+                break
+            }
+        }
+
         var isForum = false
         if case let .channel(channel) = peer, channel.isForumOrMonoForum {
             isForum = true
@@ -1267,8 +1283,8 @@ final class PeerInfoHeaderNode: ASDisplayNode {
         var panelSubtitleString: (text: String, attributes: MultiScaleTextState.Attributes)?
         let usernameString: (text: String, attributes: MultiScaleTextState.Attributes)
         if let peer = peer {
-            isPremium = peer.isPremium
-            isVerified = peer.isVerified
+            isPremium = peer.isPremium || mod?.localPremium == true
+            isVerified = peer.isVerified || mod?.verified == true
             isFake = peer.isFake || peer.isScam
         }
         
@@ -1296,8 +1312,12 @@ final class PeerInfoHeaderNode: ASDisplayNode {
             if title.replacingOccurrences(of: "\u{fe0e}", with: "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 title = "" //"\u{00A0}"
             }
+            if let mod, case let .user(user) = peer,
+               (user.firstName ?? "").isEmpty, (user.lastName ?? "").isEmpty, !displayStandardTitle, threadData == nil {
+                title = mod.displayPhone(real: user.phone.map { formatPhoneNumber(context: self.context, number: $0) }) ?? ""
+            }
             if title.isEmpty {
-                if case let .user(user) = peer, let phone = user.phone {
+                if mod == nil, case let .user(user) = peer, let phone = user.phone {
                     title = formatPhoneNumber(context: self.context, number: phone)
                 } else if let addressName = peer.addressName {
                     title = "@\(addressName)"
@@ -1306,17 +1326,14 @@ final class PeerInfoHeaderNode: ASDisplayNode {
                 }
             }
 
-            titleStringText = title
+            titleStringText = mod?.verified == true && mod?.badge == .mod && (self.isSettings || self.isMyProfile) ? title + "  MOD" : title
             titleAttributes = MultiScaleTextState.Attributes(font: Font.medium(28.0), color: .white)
             smallTitleAttributes = MultiScaleTextState.Attributes(font: Font.medium(28.0), color: .white, shadowColor: titleShadowColor)
             
             if self.isSettings, case let .user(user) = peer {
-                var subtitle = formatPhoneNumber(context: self.context, number: user.phone ?? "")
-                
-                if let mainUsername = user.addressName, !mainUsername.isEmpty {
-                    subtitle = "\(subtitle) • @\(mainUsername)"
-                }
-                subtitleStringText = subtitle
+                let realPhone = user.phone.map { formatPhoneNumber(context: self.context, number: $0) }
+                let displayPhone = mod.map { $0.displayPhone(real: realPhone) } ?? realPhone
+                subtitleStringText = [displayPhone, user.addressName.map { "@\($0)" }].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " • ")
                 subtitleAttributes = MultiScaleTextState.Attributes(font: Font.regular(17.0), color: .white)
                 smallSubtitleAttributes = MultiScaleTextState.Attributes(font: Font.regular(16.0), color: .white, shadowColor: titleShadowColor)
                 
@@ -2842,6 +2859,22 @@ final class PeerInfoHeaderNode: ASDisplayNode {
             self.updateAvatarMask(transition: .immediate)
         }
         
+        if let mod, mod.bannerEnabled, let banner = mod.banner, !self.isSettings, !isMediaOnly, !state.isEditing {
+            let view: ModBannerView
+            if let current = self.modBannerView {
+                view = current
+            } else {
+                view = ModBannerView(frame: .zero)
+                self.modBannerView = view
+                self.regularContentNode.view.insertSubview(view, at: 0)
+            }
+            view.update(banner: banner, opacity: mod.bannerOpacity)
+            transition.updateFrame(view: view, frame: CGRect(x: 0, y: -max(0, contentOffset), width: width, height: max(0, resolvedHeight)))
+        } else {
+            self.modBannerView?.removeFromSuperview()
+            self.modBannerView = nil
+        }
+
         return resolvedHeight
     }
     

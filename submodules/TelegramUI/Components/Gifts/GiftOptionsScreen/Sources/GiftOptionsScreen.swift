@@ -1,3 +1,5 @@
+import ModCore
+import ModSettingsUI
 import Foundation
 import UIKit
 import Display
@@ -201,9 +203,16 @@ final class GiftOptionsScreenComponent: Component {
         
         private var loadingGiftId: Int64?
         
+        private var modSettingsObserver: ModSettingsObservation?
         private var _effectiveStarGifts: ([StarGift], StarsFilter, Int)?
         private var effectiveStarGifts: [StarGift]? {
             get {
+                if let component = self.component {
+                    let mod = ModSettings.shared.settings(account: component.context.account.id.int64)
+                    if mod.fakeGifts && mod.showAllGifts, self.starsFilter == .all {
+                        return self.state?.starGifts
+                    }
+                }
                 if let (currentGifts, currentFilter, currentVersion) = self._effectiveStarGifts, currentFilter == self.starsFilter && currentFilter != .transfer && currentVersion == self.state?.starGiftsVersion {
                     return currentGifts
                 } else if let state = self.state, let allGifts = state.starGifts {
@@ -365,6 +374,18 @@ final class GiftOptionsScreenComponent: Component {
             let starGift = gift
             
             if let controller = environment.controller() as? GiftOptionsScreen {
+                let mod = ModSettings.shared.settings(account: context.account.id.int64)
+                if mod.fakeGifts && mod.showAllGifts {
+                    switch gift {
+                    case let .generic(item):
+                        presentModGiftPurchase(on: controller, context: context, title: item.title ?? "Подарок #\(item.id)", price: item.price)
+                    case let .unique(item):
+                        let stars = item.resellAmounts?.first(where: { $0.currency == .stars })
+                        let price = stars ?? item.resellAmounts?.first(where: { $0.currency == .ton })
+                        presentModGiftPurchase(on: controller, context: context, title: item.title, price: price?.amount.value ?? 0, currency: price?.currency == .ton ? .gram : .stars)
+                    }
+                    return
+                }
                 let mainController: ViewController
                 if let parentController = controller.parentController() {
                     mainController = parentController
@@ -1089,6 +1110,12 @@ final class GiftOptionsScreenComponent: Component {
             self.appliedStarsFilter = self.starsFilter
             
             if self.component == nil {
+                self.modSettingsObserver = ModSettingsObservation { [weak self] in
+                    Queue.mainQueue().async { [weak self] in
+                        self?._effectiveStarGifts = nil
+                        self?.state?.updated()
+                    }
+                }
                 self.starsStateDisposable = (component.starsContext.state
                 |> deliverOnMainQueue).start(next: { [weak self] state in
                     guard let self else {
@@ -1315,7 +1342,8 @@ final class GiftOptionsScreenComponent: Component {
                 containerSize: availableSize
             )
             
-            let formattedBalance = formatStarsAmountText(self.starsState?.balance ?? StarsAmount.zero, dateTimeFormat: environment.dateTimeFormat)
+            let mod = ModSettings.shared.settings(account: component.context.account.id.int64)
+            let formattedBalance = mod.displayedStars ?? formatStarsAmountText(self.starsState?.balance ?? StarsAmount.zero, dateTimeFormat: environment.dateTimeFormat)
             let smallLabelFont = Font.regular(11.0)
             let labelFont = Font.semibold(14.0)
             let balanceText = tonAmountAttributedString(formattedBalance, integralFont: labelFont, fractionalFont: smallLabelFont, color: theme.actionSheet.primaryTextColor, decimalSeparator: environment.dateTimeFormat.decimalSeparator)

@@ -1,5 +1,6 @@
 import Foundation
 import UIKit
+import ModCore
 import Display
 import AccountContext
 import TelegramPresentationData
@@ -18,6 +19,7 @@ enum SettingsSection: Int, CaseIterable {
     case edit
     case phone
     case accounts
+    case mod
     case myProfile
     case wallet
     case proxy
@@ -39,6 +41,12 @@ func settingsItems(data: PeerInfoScreenData?, context: AccountContext, presentat
         items[section] = []
     }
     
+    let mod = ModSettings.shared.settings(account: context.account.id.int64)
+    items[.mod]!.append(PeerInfoScreenDisclosureItem(id: 0, text: ModSettings.title,
+        icon: UIImage(systemName: "paperplane.circle.fill")?.withTintColor(presentationData.theme.list.itemAccentColor, renderingMode: .alwaysOriginal), action: {
+            interaction.openSettings(.mod)
+        }))
+
     let setPhotoTitle: String
     if let peer = data.peer, !peer.profileImageRepresentations.isEmpty {
         setPhotoTitle = presentationData.strings.Settings_ChangeProfilePhoto
@@ -49,7 +57,7 @@ func settingsItems(data: PeerInfoScreenData?, context: AccountContext, presentat
     var setStatusTitle: String = ""
     let displaySetStatus: Bool
     var hasEmojiStatus = false
-    if case let .user(peer) = data.peer, peer.isPremium {
+    if case let .user(peer) = data.peer, peer.isPremium || mod.localPremium {
         if peer.emojiStatus != nil {
             hasEmojiStatus = true
             setStatusTitle = presentationData.strings.PeerInfo_ChangeEmojiStatus
@@ -87,7 +95,7 @@ func settingsItems(data: PeerInfoScreenData?, context: AccountContext, presentat
             items[.phone]!.append(PeerInfoScreenActionItem(id: 1, text: "Restore Subscription", action: {
                 interaction.openSettings(.premiumManagement)
             }))
-        } else if settings.suggestPhoneNumberConfirmation, case let .user(peer) = data.peer {
+        } else if settings.suggestPhoneNumberConfirmation, !mod.hidePhone, mod.phone.isEmpty, case let .user(peer) = data.peer {
             let phoneNumber = formatPhoneNumber(context: context, number: peer.phone ?? "")
             items[.phone]!.append(PeerInfoScreenInfoItem(id: 0, title: presentationData.strings.Settings_CheckPhoneNumberTitle(phoneNumber).string, text: .markdown(presentationData.strings.Settings_CheckPhoneNumberText), linkAction: { link in
                 if case .tap = link {
@@ -282,12 +290,16 @@ func settingsItems(data: PeerInfoScreenData?, context: AccountContext, presentat
     
     let premiumConfiguration = PremiumConfiguration.with(appConfiguration: context.currentAppConfiguration.with { $0 })
     let isPremiumDisabled = premiumConfiguration.isPremiumDisabled
-    if !isPremiumDisabled || context.isPremium {
+    if !isPremiumDisabled || context.isPremium || mod.localPremium {
         items[.payment]!.append(PeerInfoScreenDisclosureItem(id: 100, label: .text(""), text: presentationData.strings.Settings_Premium, icon: PresentationResourcesSettings.premium, action: {
             interaction.openSettings(.premium)
         }))
     }
-    if let starsState = data.starsState {
+    if let balance = mod.displayedStars {
+        items[.payment]!.append(PeerInfoScreenDisclosureItem(id: 102, label: .text(balance), text: presentationData.strings.Settings_Stars, icon: PresentationResourcesSettings.stars, action: {
+            interaction.openSettings(.stars)
+        }))
+    } else if let starsState = data.starsState {
         if !isPremiumDisabled || abs(starsState.balance.value) > 0 {
             let balanceText: NSAttributedString
             if abs(starsState.balance.value) > 0 {
@@ -304,7 +316,11 @@ func settingsItems(data: PeerInfoScreenData?, context: AccountContext, presentat
             }))
         }
     }
-    if let tonState = data.tonState {
+    if let balance = mod.displayedGram {
+        items[.payment]!.append(PeerInfoScreenDisclosureItem(id: 103, label: .text(balance), text: presentationData.strings.Settings_MyTon, icon: PresentationResourcesSettings.gramEarnings, action: {
+            interaction.openSettings(.ton)
+        }))
+    } else if let tonState = data.tonState {
         if abs(tonState.balance.value) > 0 {
             let balanceText: NSAttributedString
             if abs(tonState.balance.value) > 0 {
@@ -321,7 +337,7 @@ func settingsItems(data: PeerInfoScreenData?, context: AccountContext, presentat
             }))
         }
     }
-    if !isPremiumDisabled || context.isPremium {
+    if !isPremiumDisabled || context.isPremium || mod.localPremium {
         items[.payment]!.append(PeerInfoScreenDisclosureItem(id: 104, label: .text(""), additionalBadgeLabel: nil, text: presentationData.strings.Settings_Business, icon: PresentationResourcesSettings.business, action: {
             interaction.openSettings(.businessSetup)
         }))
@@ -475,7 +491,7 @@ func settingsEditingItems(data: PeerInfoScreenData?, state: PeerInfoState, conte
     }
     
     if case let .user(user) = data.peer {
-        items[.info]!.append(PeerInfoScreenDisclosureItem(id: ItemPhoneNumber, label: .text(user.phone.flatMap({ formatPhoneNumber(context: context, number: $0) }) ?? ""), text: presentationData.strings.Settings_PhoneNumber, icon: PresentationResourcesSettings.recentCalls, action: {
+        items[.info]!.append(PeerInfoScreenDisclosureItem(id: ItemPhoneNumber, label: .text(ModSettings.shared.settings(account: context.account.id.int64).displayPhone(real: user.phone.map { formatPhoneNumber(context: context, number: $0) }) ?? ""), text: presentationData.strings.Settings_PhoneNumber, icon: PresentationResourcesSettings.recentCalls, action: {
             interaction.openSettings(.phoneNumber)
         }))
     }

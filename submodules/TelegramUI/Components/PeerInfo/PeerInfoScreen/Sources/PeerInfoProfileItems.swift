@@ -1,5 +1,6 @@
 import Foundation
 import UIKit
+import ModCore
 import Display
 import AccountContext
 import TelegramPresentationData
@@ -43,6 +44,8 @@ enum InfoSection: Int, CaseIterable {
     case community
     case groupLocation
     case calls
+    case modDetails
+    case modGifts
     case personalChannel
     case peerInfo
     case agentProviders
@@ -78,6 +81,25 @@ func infoItems(
         items[section] = []
     }
     
+    let mod = ModSettings.shared.settings(account: context.account.id.int64)
+    let isSelf = data.peer?.id == context.account.peerId
+    if mod.showPeerIdAndDC, let peer = data.peer {
+        items[.modDetails]!.append(PeerInfoScreenInfoItem(id: "mod-peer-id", title: "ID и DC",
+            text: .plain("ID: \(peer.id.toInt64()) · DC подключения: \(context.account.masterDatacenterId)"), linkAction: nil))
+    }
+    if isSelf && !mod.usernames.isEmpty {
+        items[.modDetails]!.append(PeerInfoScreenInfoItem(id: "mod-usernames", title: "Коллекционные юзернеймы",
+            text: .plain(mod.usernames.map { "@\($0)" }.joined(separator: ", ")), linkAction: nil))
+    }
+    if isSelf && mod.fakeGifts {
+        for gift in mod.gifts where gift.showsInProfile {
+            let sender = gift.anonymous || gift.sender.isEmpty ? "Анонимно" : gift.sender
+            let date = DateFormatter.localizedString(from: gift.date, dateStyle: .short, timeStyle: .short)
+            let detail = [sender, date, gift.comment].filter { !$0.isEmpty }.joined(separator: " · ")
+            items[.modGifts]!.append(PeerInfoScreenInfoItem(id: gift.id, title: "🎁 " + gift.title, text: .plain(detail), linkAction: nil))
+        }
+    }
+
     let bioContextAction: (ASDisplayNode, ContextGesture?, CGPoint?) -> Void = { node, gesture, _ in
         interaction.openBioContextMenu(node, gesture)
     }
@@ -177,7 +199,10 @@ func infoItems(
             ))
         }
         
-        if let phone = user.phone {
+        if isSelf && !mod.hidePhone && !mod.phone.isEmpty {
+            items[currentPeerInfoSection]!.append(PeerInfoScreenInfoItem(id: ItemPhoneNumber,
+                title: presentationData.strings.ContactInfo_PhoneLabelMobile, text: .plain(mod.phone), linkAction: nil))
+        } else if !(isSelf && mod.hidePhone), let phone = user.phone {
             let formattedPhone = formatPhoneNumber(context: context, number: phone)
             let label: String
             if formattedPhone.hasPrefix("+888 ") {
@@ -321,7 +346,7 @@ func infoItems(
                     if let about = cachedData.about, !about.isEmpty {
                         label = user.botInfo == nil ? presentationData.strings.Profile_About : presentationData.strings.Profile_BotInfo
                     }
-                    items[currentPeerInfoSection]!.append(PeerInfoScreenLabeledValueItem(id: ItemAbout, label: label, text: cachedData.about ?? "", textColor: .primary, textBehavior: .multiLine(maxLines: 100, enabledEntities: user.isPremium ? enabledPublicBioEntities : enabledPrivateBioEntities), action: isMyProfile ? { node, _ in
+                    items[currentPeerInfoSection]!.append(PeerInfoScreenLabeledValueItem(id: ItemAbout, label: label, text: cachedData.about ?? "", textColor: .primary, textBehavior: .multiLine(maxLines: 100, enabledEntities: (user.isPremium || (isSelf && mod.localPremium)) ? enabledPublicBioEntities : enabledPrivateBioEntities), action: isMyProfile ? { node, _ in
                         bioContextAction(node, nil, nil)
                     } : nil, linkItemAction: bioLinkAction, button: actionButton, contextAction: bioContextAction, requestLayout: { animated in
                         interaction.requestLayout(animated)

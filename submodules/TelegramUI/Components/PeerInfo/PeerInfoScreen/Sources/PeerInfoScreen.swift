@@ -1,4 +1,5 @@
 import Foundation
+import ModCore
 import UIKit
 import Display
 import AsyncDisplayKit
@@ -162,6 +163,7 @@ enum PeerInfoContextSubject {
 }
 
 enum PeerInfoSettingsSection {
+    case mod
     case avatar
     case edit
     case proxy
@@ -235,6 +237,7 @@ final class PeerInfoScrollNode: ASScrollNode {
 }
 
 final class PeerInfoScreenNode: ViewControllerTracingNode, PeerInfoScreenNodeProtocol, ASScrollViewDelegate {
+    private var modSettingsObserver: NSObjectProtocol?
     weak var controller: PeerInfoScreenImpl?
     
     let context: AccountContext
@@ -2746,6 +2749,9 @@ final class PeerInfoScreenNode: ViewControllerTracingNode, PeerInfoScreenNodePro
     }
     
     deinit {
+        if let modSettingsObserver = self.modSettingsObserver {
+            NotificationCenter.default.removeObserver(modSettingsObserver)
+        }
         self.dataDisposable?.dispose()
         self.walletStickersPreloadDisposable.dispose()
         self.hiddenMediaDisposable?.dispose()
@@ -2783,6 +2789,12 @@ final class PeerInfoScreenNode: ViewControllerTracingNode, PeerInfoScreenNodePro
     
     override func didLoad() {
         super.didLoad()
+        self.modSettingsObserver = NotificationCenter.default.addObserver(forName: ModSettings.didChange, object: nil, queue: .main) { [weak self] _ in
+            Queue.mainQueue().async { [weak self] in
+                guard let self else { return }
+                self.requestLayout()
+            }
+        }
                 
         self.view.disablesInteractiveTransitionGestureRecognizerNow = { [weak self] in
             if let strongSelf = self {
