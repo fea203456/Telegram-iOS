@@ -1,18 +1,13 @@
 #import <BuildConfigExtra/BuildConfigExtra.h>
 
-#include <mach-o/arch.h>
-#include <mach-o/loader.h>
+#include <mach-o/dyld.h>
 #include <mach-o/fat.h>
-
+#include <mach-o/loader.h>
+#include <libkern/OSByteOrder.h>
+#include <limits.h>
 #include <string.h>
-#include <fcntl.h>
-#include <unistd.h>
-#include <sys/mman.h>
-#include <sys/stat.h>
 
-#import <CommonCrypto/CommonCrypto.h>
 #import <CommonCrypto/CommonDigest.h>
-
 #import <PKCS/PKCS.h>
 
 static NSData *sha1(NSData *data) {
@@ -22,230 +17,135 @@ static NSData *sha1(NSData *data) {
     return [[NSData alloc] initWithBytes:digest length:20];
 }
 
-static NSString *telegramApplicationSecretKey = @"telegramApplicationSecretKey_v3";
-
-static uint32_t funcSwap32(uint32_t input)
-{
-    return OSSwapBigToHostInt32(input);
-}
-
-static uint32_t funcNoSwap32(uint32_t input)
-{
-    return OSSwapLittleToHostInt32(input);
-}
-
-/*
- * Magic numbers used by Code Signing
- */
 enum {
-    kSecCodeMagicRequirement = 0xfade0c00,       /* single requirement */
-    kSecCodeMagicRequirementSet = 0xfade0c01,    /* requirement set */
-    kSecCodeMagicCodeDirectory = 0xfade0c02,     /* CodeDirectory */
-    kSecCodeMagicEmbeddedSignature = 0xfade0cc0, /* single-architecture embedded signature */
-    kSecCodeMagicDetachedSignature = 0xfade0cc1, /* detached multi-architecture signature */
-    kSecCodeMagicEntitlement = 0xfade7171,       /* entitlement blob */
-    
-    kSecCodeMagicByte = 0xfa                     /* shared first byte */
+    EmbeddedSignatureMagic = 0xfade0cc0,
+    EntitlementsMagic = 0xfade7171,
+    CMSSignatureMagic = 0xfade0b01,
 };
 
+static uint32_t readBigEndian32(const uint8_t *bytes) {
+    uint32_t value;
+    memcpy(&value, bytes, sizeof(value));
+    return OSSwapBigToHostInt32(value);
+}
 
-/*
- * Structure of an embedded-signature SuperBlob
- */
-typedef struct __BlobIndex {
-    uint32_t type;                  /* type of entry */
-    uint32_t offset;                /* offset of entry */
-} CS_BlobIndex;
-
-typedef struct __Blob {
-    uint32_t magic;                 /* magic number */
-    uint32_t length;                /* total length of SuperBlob */
-} CS_Blob;
-
-typedef struct __SuperBlob {
-    CS_Blob blob;
-    uint32_t count;                  /* number of index entries following */
-    CS_BlobIndex index[];            /* (count) entries */
-    /* followed by Blobs in no particular order as indicated by offsets in index */
-} CS_SuperBlob;
-
-
-/*
- * C form of a CodeDirectory.
- */
-typedef struct __CodeDirectory {
-    uint32_t magic;                 /* magic number (CSMAGIC_CODEDIRECTORY) */
-    uint32_t length;                /* total length of CodeDirectory blob */
-    uint32_t version;               /* compatibility version */
-    uint32_t flags;                 /* setup and mode flags */
-    uint32_t hashOffset;            /* offset of hash slot element at index zero */
-    uint32_t identOffset;           /* offset of identifier string */
-    uint32_t nSpecialSlots;         /* number of special hash slots */
-    uint32_t nCodeSlots;            /* number of ordinary (code) hash slots */
-    uint32_t codeLimit;             /* limit to main image signature range */
-    uint8_t hashSize;               /* size of each hash in bytes */
-    uint8_t hashType;               /* type of hash (cdHashType* constants) */
-    uint8_t spare1;                 /* unused (must be zero) */
-    uint8_t    pageSize;            /* log2(page size in bytes); 0 => infinite */
-    uint32_t spare2;                /* unused (must be zero) */
-    /* followed by dynamic content as located by offset fields above */
-} CS_CodeDirectory;
-
-static MTPKCS * _Nullable parseSignature(const char* buffer, size_t size) {
-    CS_SuperBlob* sb = (CS_SuperBlob*)buffer;
-    if (OSSwapBigToHostInt32(sb->blob.magic) != kSecCodeMagicEmbeddedSignature)
-    {
-        return 0;
+static NSData *signatureEntry(const uint8_t *bytes, size_t size, uint32_t entryMagic) {
+    const size_t headerSize = 12;
+    const size_t indexSize = 8;
+    const size_t entryHeaderSize = 8;
+    if (size < headerSize || readBigEndian32(bytes) != EmbeddedSignatureMagic) {
+        return nil;
     }
-    
-    uint32_t count = OSSwapBigToHostInt32(sb->count);
-    
-    for (uint32_t i = 0; i < count; i++)
-    {
-        uint32_t offset = OSSwapBigToHostInt32(sb->index[i].offset);
-        
-        const CS_Blob* blobMem = (const CS_Blob*)(buffer + offset);
-        CS_Blob blob;
-        memcpy(&blob, blobMem, sizeof(CS_Blob));
-        
-        if (OSSwapBigToHostInt32(blob.magic) == 0xfade0b01) // signature
-        {
-            printf("Embedded signature, length: %d\n", OSSwapBigToHostInt32(blob.length));
-            
-            if (OSSwapBigToHostInt32(blob.length) != 8)
-            {
-                const unsigned char* message = (const unsigned char*)buffer + offset + 8;
-                MTPKCS *result = [MTPKCS parse:message size:(OSSwapBigToHostInt32(blob.length) - 8)];
-                return result;
+    size_t length = readBigEndian32(bytes + 4);
+    uint32_t entryCount = readBigEndian32(bytes + 8);
+    if (length < headerSize || length > size || entryCount > (length - headerSize) / indexSize) {
+        return nil;
+    }
+    for (uint32_t i = 0; i < entryCount; i++) {
+        size_t entryOffset = readBigEndian32(bytes + headerSize + i * indexSize + 4);
+        if (entryOffset < headerSize + entryCount * indexSize || entryOffset > length - entryHeaderSize) {
+            return nil;
+        }
+        const uint8_t *entry = bytes + entryOffset;
+        if (readBigEndian32(entry) == entryMagic) {
+            size_t entryLength = readBigEndian32(entry + 4);
+            if (entryLength <= entryHeaderSize || entryLength > length - entryOffset) {
+                return nil;
             }
+            return [NSData dataWithBytes:entry + entryHeaderSize length:entryLength - entryHeaderSize];
         }
     }
-    
     return nil;
 }
 
-static MTPKCS * _Nullable parseArch(const char* buffer, size_t size) {
-    uint32_t (*swap32)(uint32_t) = funcNoSwap32;
-    
-    uint32_t offset = 0;
-    
-    const struct mach_header* header = (struct mach_header*)(buffer + offset);
-    
-    switch (header->magic) {
-        case MH_CIGAM:
-            swap32 = funcSwap32;
+static NSData *signatureEntryInMachO(const uint8_t *bytes, size_t size, uint32_t entryMagic) {
+    struct mach_header header;
+    if (size < sizeof(header)) {
+        return nil;
+    }
+    memcpy(&header, bytes, sizeof(header));
+    // The active iOS and macOS slices are little endian.
+    size_t offset;
+    switch (header.magic) {
         case MH_MAGIC:
-            offset += sizeof(struct mach_header);
+            offset = sizeof(struct mach_header);
             break;
-        case MH_CIGAM_64:
-            swap32 = funcSwap32;
         case MH_MAGIC_64:
-            offset += sizeof(struct mach_header_64);
+            offset = sizeof(struct mach_header_64);
             break;
         default:
             return nil;
     }
-    
-    const NXArchInfo *archInfo = NXGetArchInfoFromCpuType(swap32(header->cputype), swap32(header->cpusubtype));
-    if (archInfo != NULL) {
-        printf("Architecture: %s\n", archInfo->name);
+    if (offset > size || header.sizeofcmds > size - offset) {
+        return nil;
     }
-    
-    uint32_t commandCount = swap32(header->ncmds);
-    
-    for (uint32_t i = 0; i < commandCount; i++) {
-        const struct load_command* loadCommand = (const struct load_command*)(buffer + offset);
-        uint32_t commandSize = swap32(loadCommand->cmdsize);
-        
-        uint32_t commandType = swap32(loadCommand->cmd);
-        if (commandType == LC_CODE_SIGNATURE) {
-            const struct linkedit_data_command* dataCommand = (const struct linkedit_data_command*)(buffer + offset);
-            uint32_t dataOffset = swap32(dataCommand->dataoff);
-            uint32_t dataSize = swap32(dataCommand->datasize);
-            
-            return parseSignature(buffer + dataOffset, dataSize);
+    size_t commandsEnd = offset + header.sizeofcmds;
+    for (uint32_t i = 0; i < header.ncmds; i++) {
+        struct load_command command;
+        if (commandsEnd - offset < sizeof(command)) {
+            return nil;
         }
-        
-        offset += commandSize;
+        memcpy(&command, bytes + offset, sizeof(command));
+        if (command.cmdsize < sizeof(command) || command.cmdsize > commandsEnd - offset) {
+            return nil;
+        }
+        if (command.cmd == LC_CODE_SIGNATURE) {
+            struct linkedit_data_command signature;
+            if (command.cmdsize < sizeof(signature)) {
+                return nil;
+            }
+            memcpy(&signature, bytes + offset, sizeof(signature));
+            if (signature.dataoff > size || signature.datasize > size - signature.dataoff) {
+                return nil;
+            }
+            return signatureEntry(bytes + signature.dataoff, signature.datasize, entryMagic);
+        }
+        offset += command.cmdsize;
     }
-    
     return nil;
 }
 
-static MTPKCS * _Nullable parseFat(const char *buffer, size_t size) {
-    size_t offset = 0;
-    
-    const struct fat_header* fatHeader = (const struct fat_header*)(buffer + offset);
-    offset += sizeof(*fatHeader);
-    
-    uint32_t archCount = OSSwapBigToHostInt32(fatHeader->nfat_arch);
-    
-    for (uint32_t i = 0; i < archCount; i++) {
-        const struct fat_arch* arch = (const struct fat_arch*)(buffer + offset);
-        offset += sizeof(*arch);
-        
-        uint32_t archOffset = OSSwapBigToHostInt32(arch->offset);
-        uint32_t archSize = OSSwapBigToHostInt32(arch->size);
-        
-        MTPKCS *result = parseArch(buffer + archOffset, archSize);
-        if (result != nil) {
-            return result;
-        }
+static NSData *executableSignatureEntry(uint32_t entryMagic) {
+    NSString *path = NSBundle.mainBundle.executablePath;
+    NSData *executable = path ? [NSData dataWithContentsOfFile:path options:NSDataReadingMappedIfSafe error:NULL] : nil;
+    if (executable.length < sizeof(struct fat_header)) {
+        return nil;
     }
-    
+    const uint8_t *bytes = executable.bytes;
+    if (readBigEndian32(bytes) != FAT_MAGIC) {
+        return signatureEntryInMachO(bytes, executable.length, entryMagic);
+    }
+
+    const struct mach_header *loaded = _dyld_get_image_header(0);
+    uint32_t count = readBigEndian32(bytes + 4);
+    size_t offset = sizeof(struct fat_header);
+    if (!loaded || count > (executable.length - offset) / sizeof(struct fat_arch)) {
+        return nil;
+    }
+    for (uint32_t i = 0; i < count; i++, offset += sizeof(struct fat_arch)) {
+        struct fat_arch arch;
+        memcpy(&arch, bytes + offset, sizeof(arch));
+        cpu_type_t type = OSSwapBigToHostInt32(arch.cputype);
+        cpu_subtype_t subtype = OSSwapBigToHostInt32(arch.cpusubtype);
+        if (type != loaded->cputype || (subtype & ~CPU_SUBTYPE_MASK) != (loaded->cpusubtype & ~CPU_SUBTYPE_MASK)) {
+            continue;
+        }
+        size_t sliceOffset = OSSwapBigToHostInt32(arch.offset);
+        size_t sliceLength = OSSwapBigToHostInt32(arch.size);
+        if (sliceOffset > executable.length || sliceLength > executable.length - sliceOffset) {
+            return nil;
+        }
+        return signatureEntryInMachO(bytes + sliceOffset, sliceLength, entryMagic);
+    }
     return nil;
-}
-
-static MTPKCS * _Nullable parseMachO(const char* buffer, size_t size) {
-    const uint32_t* magic = (const uint32_t*)buffer;
-    
-    if (*magic == FAT_CIGAM || *magic == FAT_MAGIC) {
-        return parseFat(buffer, size);
-    } else {
-        return parseArch(buffer, size);
-    }
-}
-
-static MTPKCS * _Nullable checkSignature(const char *filename) {
-    char *buffer = NULL;
-    
-    int fd = open(filename, O_RDONLY);
-    
-    if (fd == -1) {
-        return nil;
-    }
-    
-    struct stat st;
-    fstat(fd, &st);
-    
-    buffer = mmap(NULL, (size_t)st.st_size, PROT_READ, MAP_FILE|MAP_PRIVATE, fd, 0);
-    
-    if (buffer == MAP_FAILED) {
-        if (buffer) {
-            munmap(buffer, (size_t)st.st_size);
-        }
-        if (fd != -1) {
-            close(fd);
-        }
-        return nil;
-    }
-    
-    MTPKCS *result = parseMachO(buffer, (size_t)st.st_size);
-    if (buffer) {
-        munmap(buffer, (size_t)st.st_size);
-    }
-    if (fd != -1) {
-        close(fd);
-    }
-    
-    return result;
 }
 
 @implementation BuildConfigExtra
 
 + (NSDictionary * _Nonnull)signatureDict {
     NSMutableDictionary *dataDict = [[NSMutableDictionary alloc] init];
-    MTPKCS *signature = checkSignature([[[NSBundle mainBundle] executablePath] UTF8String]);
+    NSData *cms = executableSignatureEntry(CMSSignatureMagic);
+    MTPKCS *signature = cms && cms.length <= INT_MAX ? [MTPKCS parse:cms.bytes size:(int)cms.length] : nil;
     if (signature.issuerName != nil) {
         dataDict[@"issuerName"] = signature.issuerName;
     }
@@ -257,6 +157,31 @@ static MTPKCS * _Nullable checkSignature(const char *filename) {
         dataDict[@"data1"] = [signature.data base64EncodedStringWithOptions:0];
     }
     return dataDict;
+}
+
++ (NSDictionary<NSString *, id> *)applicationEntitlements {
+    static NSDictionary<NSString *, id> *entitlements;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        NSData *entry = executableSignatureEntry(EntitlementsMagic);
+        id plist = entry ? [NSPropertyListSerialization propertyListWithData:entry options:NSPropertyListImmutable format:NULL error:NULL] : nil;
+        entitlements = [plist isKindOfClass:[NSDictionary class]] ? plist : @{};
+    });
+    return entitlements;
+}
+
++ (BOOL)hasAPNsEntitlement {
+    id environment = [self applicationEntitlements][@"aps-environment"];
+    return [environment isEqual:@"development"] || [environment isEqual:@"production"];
+}
+
++ (BOOL)performSystemRegistration:(BOOL (NS_NOESCAPE ^)(void))registration {
+    @try {
+        return registration();
+    } @catch (NSException *exception) {
+        NSLog(@"System registration failed: %@", exception.name);
+        return NO;
+    }
 }
 
 @end

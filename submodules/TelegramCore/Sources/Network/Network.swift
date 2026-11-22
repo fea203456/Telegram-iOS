@@ -6,9 +6,6 @@ import SwiftSignalKit
 import MtProtoKit
 import NetworkLogging
 
-#if os(iOS)
-    import CloudData
-#endif
 
 import EncryptionProvider
 
@@ -401,9 +398,6 @@ public struct NetworkInitializationArguments {
         self.networkEngineFactory = networkEngineFactory
     }
 }
-#if os(iOS)
-private let cloudDataContext = Atomic<CloudDataContext?>(value: nil)
-#endif
 
 func networkEngineRustDisabled(appConfiguration: AppConfiguration) -> Bool {
     guard let data = appConfiguration.data, let value = data["mtproto_engine_rust_disabled"] else {
@@ -632,34 +626,8 @@ func initializedNetwork(accountId: AccountRecordId, arguments: NetworkInitializa
             }
             
             context.keychain = keychain
-            var wrappedAdditionalSource: MTSignal?
-            #if os(iOS)
-            if #available(iOS 10.0, *), !supplementary, arguments.isICloudEnabled {
-                var cloudDataContextValue: CloudDataContext?
-                if let value = cloudDataContext.with({ $0 }) {
-                    cloudDataContextValue = value
-                } else {
-                    cloudDataContextValue = makeCloudDataContext(encryptionProvider: arguments.encryptionProvider)
-                    let _ = cloudDataContext.swap(cloudDataContextValue)
-                }
-                
-                if let cloudDataContext = cloudDataContextValue {
-                    wrappedAdditionalSource = MTSignal(generator: { subscriber in
-                        let disposable = cloudDataContext.get(phoneNumber: .single(phoneNumber)).start(next: { value in
-                            subscriber?.putNext(value)
-                        }, completed: {
-                            subscriber?.putCompletion()
-                        })
-                        return MTBlockDisposable(block: {
-                            disposable.dispose()
-                        })
-                    })
-                }
-            }
-            #endif
-            
             if !supplementary {
-                context.setDiscoverBackupAddressListSignal(MTBackupAddressSignals.fetchBackupIps(testingEnvironment, currentContext: context, additionalSource: wrappedAdditionalSource, phoneNumber: phoneNumber, mainDatacenterId: datacenterId))
+                context.setDiscoverBackupAddressListSignal(MTBackupAddressSignals.fetchBackupIps(testingEnvironment, currentContext: context, additionalSource: nil, phoneNumber: phoneNumber, mainDatacenterId: datacenterId))
                 let externalRequestVerificationStream = arguments.externalRequestVerificationStream
                 context.setExternalRequestVerification({ nonce in
                     return MTSignal(generator: { subscriber in
@@ -1580,15 +1548,6 @@ class Keychain: NSObject, MTKeychain {
         self.remove(group + ":" + aKey)
     }
 }
-#if os(iOS)
-func makeCloudDataContext(encryptionProvider: EncryptionProvider) -> CloudDataContext? {
-    if #available(iOS 10.0, *) {
-        return CloudDataContextImpl(encryptionProvider: encryptionProvider)
-    } else {
-        return nil
-    }
-}
-#endif
 
 extension Network {
     /// A network carried by `engine` alone, for tests that script the server (`Tests/StateSync`).

@@ -18,7 +18,7 @@ swift_library(
         "//submodules/WebProxyTransport:WebProxyTransport",
         "//submodules/SSignalKit/SwiftSignalKit:SwiftSignalKit",
         "//submodules/Postbox:Postbox",
-        "//submodules/CloudData:CloudData",
+        "//submodules/BuildConfigExtra:BuildConfigExtra",
         "//submodules/EncryptionProvider:EncryptionProvider",
         "//submodules/CryptoUtils:CryptoUtils",
         "//submodules/NetworkLogging:NetworkLogging",

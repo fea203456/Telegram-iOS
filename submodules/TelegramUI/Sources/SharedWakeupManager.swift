@@ -96,7 +96,6 @@ public final class SharedWakeupManager {
     
     private var pendingMediaUploadsByKey: [PendingMediaUploadKey: Float] = [:]
     private var backgroundProcessingTaskProgressByKey: [PendingMediaUploadKey: Float] = [:]
-    private var nextBackgroundProcessingTaskId: Int = 0
     private var backgroundProcessingTaskId: String?
     private var backgroundProcessingTaskLaunched: Bool = false
     private var backgroundProcessingTaskCancellationRequestedByApp: Bool = false
@@ -105,7 +104,6 @@ public final class SharedWakeupManager {
     private var pendingStoryUploadsByKey: [PendingStoryUploadKey: Float] = [:]
     private var pendingStoryUploadStatusesByKey: [PendingStoryUploadKey: PendingStoryUploadStatus] = [:]
     private var backgroundStoryProcessingTaskProgressByKey: [PendingStoryUploadKey: Float] = [:]
-    private var nextBackgroundStoryProcessingTaskId: Int = 0
     private var backgroundStoryProcessingTaskId: String?
     private var backgroundStoryProcessingTaskLaunched: Bool = false
     private var backgroundStoryProcessingTaskCancellationRequestedByApp: Bool = false
@@ -533,14 +531,15 @@ public final class SharedWakeupManager {
             return
         }
         
-        let baseAppBundleId = Bundle.main.bundleIdentifier!
-        let uploadTaskId = "\(baseAppBundleId).upload.message\(self.nextBackgroundProcessingTaskId)"
-        self.nextBackgroundProcessingTaskId += 1
+        guard let baseAppBundleId = Bundle.main.bundleIdentifier else {
+            return
+        }
+        let uploadTaskId = "\(baseAppBundleId).upload.message.\(UUID().uuidString)"
         self.backgroundProcessingTaskProgressByKey = [:]
         self.backgroundProcessingTaskLaunched = false
         self.backgroundProcessingTaskCancellationRequestedByApp = false
         
-        BGTaskScheduler.shared.register(forTaskWithIdentifier: uploadTaskId, using: nil, launchHandler: { [weak self] task in
+        let registered = registerBackgroundProcessingTask(uploadTaskId, allowsWildcard: true, launchHandler: { [weak self] task in
             guard let task = task as? BGContinuedProcessingTask else {
                 return
             }
@@ -676,6 +675,10 @@ public final class SharedWakeupManager {
             }
         })
         
+        guard registered else {
+            return
+        }
+
         let title: String = presentationData.strings.BackgroundTasks_UploadingMedia(Int32(self.pendingMediaUploadsByKey.count))
         
         let request = BGContinuedProcessingTaskRequest(
@@ -709,14 +712,15 @@ public final class SharedWakeupManager {
             return
         }
         
-        let baseAppBundleId = Bundle.main.bundleIdentifier!
-        let uploadTaskId = "\(baseAppBundleId).upload.story\(self.nextBackgroundStoryProcessingTaskId)"
-        self.nextBackgroundStoryProcessingTaskId += 1
+        guard let baseAppBundleId = Bundle.main.bundleIdentifier else {
+            return
+        }
+        let uploadTaskId = "\(baseAppBundleId).upload.story.\(UUID().uuidString)"
         self.backgroundStoryProcessingTaskProgressByKey = [:]
         self.backgroundStoryProcessingTaskLaunched = false
         self.backgroundStoryProcessingTaskCancellationRequestedByApp = false
         
-        BGTaskScheduler.shared.register(forTaskWithIdentifier: uploadTaskId, using: nil, launchHandler: { [weak self] task in
+        let registered = registerBackgroundProcessingTask(uploadTaskId, allowsWildcard: true, launchHandler: { [weak self] task in
             guard let task = task as? BGContinuedProcessingTask else {
                 return
             }
@@ -862,6 +866,10 @@ public final class SharedWakeupManager {
             }
         })
         
+        guard registered else {
+            return
+        }
+
         let title: String = presentationData.strings.BackgroundTasks_UploadingStories(Int32(self.pendingStoryUploadsByKey.count))
         let subtitle: String
         if self.pendingStoryUploadStatusesByKey.values.contains(where: { $0.phase == .processing }) {

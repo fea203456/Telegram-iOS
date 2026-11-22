@@ -55,6 +55,7 @@ swift_library(
         ":TelegramCallsUIBundle",
     ],
     deps = [
+        "//submodules/BuildConfigExtra:BuildConfigExtra",
         "//submodules/SSignalKit/SSignalKit",
         "//submodules/Postbox:Postbox",
     	"//submodules/SSignalKit/SwiftSignalKit:SwiftSignalKit",

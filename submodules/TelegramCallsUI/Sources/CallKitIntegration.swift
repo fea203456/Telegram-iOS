@@ -9,9 +9,15 @@ import AppBundle
 import AccountContext
 import TelegramAudio
 import TelegramVoip
+import BuildConfigExtra
 
 private let sharedProviderDelegate: CallKitProviderDelegate? = {
-    return CallKitProviderDelegate()
+    var delegate: CallKitProviderDelegate?
+    let registered = BuildConfigExtra.performSystemRegistration {
+        delegate = CallKitProviderDelegate()
+        return true
+    }
+    return registered ? delegate : nil
 }()
 
 public final class CallKitIntegration {
@@ -20,7 +26,8 @@ public final class CallKitIntegration {
         return false
         #else
         if #available(iOSApplicationExtension 10.0, iOS 10.0, *) {
-            return Locale.current.regionCode?.lowercased() != "cn"
+            let backgroundModes = Bundle.main.object(forInfoDictionaryKey: "UIBackgroundModes") as? [String] ?? []
+            return BuildConfigExtra.hasAPNsEntitlement() && backgroundModes.contains("voip") && Locale.current.regionCode?.lowercased() != "cn"
         } else {
             return false
         }
@@ -53,7 +60,7 @@ public final class CallKitIntegration {
     }
     
     private init?() {
-        if !CallKitIntegration.isAvailable {
+        if !CallKitIntegration.isAvailable || sharedProviderDelegate == nil {
             return nil
         }
     }

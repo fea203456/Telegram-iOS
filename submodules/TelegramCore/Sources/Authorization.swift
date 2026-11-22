@@ -3,6 +3,11 @@ import Postbox
 import SwiftSignalKit
 internal import TelegramApi
 import MtProtoKit
+#if os(iOS) && canImport(BuildConfigExtra)
+import BuildConfigExtra
+#elseif os(macOS)
+import Security
+#endif
 
 
 public enum AuthorizationCodeRequestError {
@@ -81,6 +86,29 @@ public enum SendAuthorizationCodeResult {
     case loggedIn
 }
 
+private let loginTokenCloudEntitlement = "com.apple.developer.ubiquity-kvstore-identifier"
+
+private func loginTokenCloudStore() -> NSUbiquitousKeyValueStore? {
+    #if os(iOS) && canImport(BuildConfigExtra)
+    let identifier = BuildConfigExtra.applicationEntitlements()[loginTokenCloudEntitlement] as? String
+    #elseif os(macOS)
+    let identifier = SecTaskCreateFromSelf(nil).flatMap {
+        SecTaskCopyValueForEntitlement($0, loginTokenCloudEntitlement as CFString, nil) as? String
+    }
+    #else
+    let identifier: String? = nil
+    #endif
+    guard let identifier, !identifier.isEmpty else {
+        return nil
+    }
+    return NSUbiquitousKeyValueStore.default
+}
+
+private func cloudLoginTokens(in store: NSUbiquitousKeyValueStore?) -> [Data] {
+    let tokens = store?.object(forKey: "T_SLTokens") as? [String] ?? []
+    return tokens.compactMap { Data(base64Encoded: $0) }
+}
+
 func storeFutureLoginToken(accountManager: AccountManager<TelegramAccountManagerTypes>, token: Data) {
     let _ = (accountManager.transaction { transaction -> Void in
         var tokens = transaction.getStoredLoginTokens()
@@ -89,16 +117,8 @@ func storeFutureLoginToken(accountManager: AccountManager<TelegramAccountManager
         tokens.removeAll()
         #endif
         
-        var cloudValue: [Data] = []
-        if let list = NSUbiquitousKeyValueStore.default.object(forKey: "T_SLTokens") as? [String] {
-            cloudValue = list.compactMap { string -> Data? in
-                guard let stringData = string.data(using: .utf8) else {
-                    return nil
-                }
-                return Data(base64Encoded: stringData)
-            }
-        }
-        for data in cloudValue {
+        let cloudStore = loginTokenCloudStore()
+        for data in cloudLoginTokens(in: cloudStore) {
             if !tokens.contains(data) {
                 tokens.insert(data, at: 0)
             }
@@ -108,8 +128,8 @@ func storeFutureLoginToken(accountManager: AccountManager<TelegramAccountManager
             tokens.removeLast(tokens.count - 20)
         }
         
-        NSUbiquitousKeyValueStore.default.set(tokens.map { $0.base64EncodedString() }, forKey: "T_SLTokens")
-        NSUbiquitousKeyValueStore.default.synchronize()
+        cloudStore?.set(tokens.map { $0.base64EncodedString() }, forKey: "T_SLTokens")
+        _ = cloudStore?.synchronize()
         
         transaction.setStoredLoginTokens(tokens)
     }).start()
@@ -142,15 +162,7 @@ func sendFirebaseAuthorizationCode(network: Network, phoneNumber: String, apiId:
 }
 
 public func sendAuthorizationCode(accountManager: AccountManager<TelegramAccountManagerTypes>, account: UnauthorizedAccount, phoneNumber: String, apiId: Int32, apiHash: String, pushNotificationConfiguration: AuthorizationCodePushNotificationConfiguration?, firebaseSecretStream: Signal<[String: String], NoError>, syncContacts: Bool, disableAuthTokens: Bool = false, forcedPasswordSetupNotice: @escaping (Int32) -> (NoticeEntryKey, CodableEntry)?) -> Signal<SendAuthorizationCodeResult, AuthorizationCodeRequestError> {
-    var cloudValue: [Data] = []
-    if let list = NSUbiquitousKeyValueStore.default.object(forKey: "T_SLTokens") as? [String] {
-        cloudValue = list.compactMap { string -> Data? in
-            guard let stringData = string.data(using: .utf8) else {
-                return nil
-            }
-            return Data(base64Encoded: stringData)
-        }
-    }
+    let cloudValue = cloudLoginTokens(in: loginTokenCloudStore())
     return accountManager.transaction { transaction -> [Data] in
         return transaction.getStoredLoginTokens()
     }

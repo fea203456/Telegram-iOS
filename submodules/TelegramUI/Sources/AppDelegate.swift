@@ -61,6 +61,27 @@ import AlertComponent
 
 private let handleVoipNotifications = false
 
+private func isBackgroundProcessingTaskPermitted(_ identifier: String, allowsWildcard: Bool) -> Bool {
+    let modes = Bundle.main.object(forInfoDictionaryKey: "UIBackgroundModes") as? [String] ?? []
+    let permittedIdentifiers = Bundle.main.object(forInfoDictionaryKey: "BGTaskSchedulerPermittedIdentifiers") as? [String] ?? []
+    guard modes.contains("processing") else {
+        return false
+    }
+    return permittedIdentifiers.contains { permittedIdentifier in
+        return permittedIdentifier == identifier || (allowsWildcard && permittedIdentifier.hasSuffix(".*") && identifier.hasPrefix(permittedIdentifier.dropLast()))
+    }
+}
+
+@available(iOS 13.0, *)
+func registerBackgroundProcessingTask(_ identifier: String, using queue: DispatchQueue? = nil, allowsWildcard: Bool = false, launchHandler: @escaping (BGTask) -> Void) -> Bool {
+    guard isBackgroundProcessingTaskPermitted(identifier, allowsWildcard: allowsWildcard) else {
+        return false
+    }
+    return BuildConfigExtra.performSystemRegistration {
+        return BGTaskScheduler.shared.register(forTaskWithIdentifier: identifier, using: queue, launchHandler: launchHandler)
+    }
+}
+
 private func writableAppDataPath(in container: URL, isUITest: Bool) -> String? {
     let fileManager = FileManager.default
     let basePath: String
@@ -1145,12 +1166,18 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
             return true
         }
 
-        let pushRegistry = PKPushRegistry(queue: .main)
-        if #available(iOS 9.0, *) {
-            pushRegistry.desiredPushTypes = Set([.voIP])
+        if #available(iOS 9.0, *), CallKitIntegration.shared != nil {
+            let _ = BuildConfigExtra.performSystemRegistration {
+                let pushRegistry = PKPushRegistry(queue: .main)
+                pushRegistry.delegate = self
+                pushRegistry.desiredPushTypes = [.voIP]
+                self.pushRegistry = pushRegistry
+                return true
+            }
         }
-        self.pushRegistry = pushRegistry
-        pushRegistry.delegate = self
+
+        let apsNotificationToken: Signal<Data?, NoError> = BuildConfigExtra.hasAPNsEntitlement() ? (self.notificationTokenPromise.get() |> map(Optional.init)) : .single(nil)
+        let voipNotificationToken: Signal<Data?, NoError> = self.pushRegistry != nil ? (self.voipTokenPromise.get() |> map(Optional.init)) : .single(nil)
 
         self.accountManagerState = extractAccountManagerState(records: accountManager._internalAccountRecordsSync())
         let _ = (accountManager.accountRecords()
@@ -1181,7 +1208,7 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
             })
             
             var setPresentationCall: ((PresentationCall?) -> Void)?
-            let sharedContext = SharedAccountContextImpl(mainWindow: self.mainWindow, sharedContainerPath: containerUrl.path, basePath: rootPath, encryptionParameters: encryptionParameters, accountManager: accountManager, appLockContext: appLockContext, notificationController: nil, applicationBindings: applicationBindings, initialPresentationDataAndSettings: initialPresentationDataAndSettings, networkArguments: networkArguments, hasInAppPurchases: buildConfig.isAppStoreBuild && buildConfig.apiId == 1, rootPath: rootPath, legacyBasePath: legacyBasePath, apsNotificationToken: self.notificationTokenPromise.get() |> map(Optional.init), voipNotificationToken: self.voipTokenPromise.get() |> map(Optional.init), firebaseSecretStream: self.firebaseSecretStream.get(), setNotificationCall: { call in
+            let sharedContext = SharedAccountContextImpl(mainWindow: self.mainWindow, sharedContainerPath: containerUrl.path, basePath: rootPath, encryptionParameters: encryptionParameters, accountManager: accountManager, appLockContext: appLockContext, notificationController: nil, applicationBindings: applicationBindings, initialPresentationDataAndSettings: initialPresentationDataAndSettings, networkArguments: networkArguments, hasInAppPurchases: buildConfig.isAppStoreBuild && buildConfig.apiId == 1, rootPath: rootPath, legacyBasePath: legacyBasePath, apsNotificationToken: apsNotificationToken, voipNotificationToken: voipNotificationToken, firebaseSecretStream: self.firebaseSecretStream.get(), setNotificationCall: { call in
                 setPresentationCall?(call)
             }, navigateToChat: { accountId, peerId, messageId, alwaysKeepMessageId in
                 self.openChatWhenReady(accountId: accountId, peerId: peerId, threadId: nil, messageId: messageId, storyId: nil, alwaysKeepMessageId: alwaysKeepMessageId)
@@ -1675,10 +1702,9 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
         
         self.maybeCheckForUpdates()
         
+        let cleanupTaskId = "\(baseAppBundleId).cleanup"
         if #available(iOS 13.0, *) {
-            let cleanupTaskId = "\(baseAppBundleId).cleanup"
-            
-            BGTaskScheduler.shared.register(forTaskWithIdentifier: cleanupTaskId, using: DispatchQueue.main) { task in
+            let registered = registerBackgroundProcessingTask(cleanupTaskId, using: .main) { task in
                 Logger.shared.log("App \(self.episodeId)", "Executing cleanup task")
                 
                 let disposable = self.runCacheReindexTasks(lowImpact: true, completion: {
@@ -1693,21 +1719,23 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
                 }
             }
             
-            BGTaskScheduler.shared.getPendingTaskRequests(completionHandler: { tasks in
-                if tasks.contains(where: { $0.identifier == cleanupTaskId }) {
-                    Logger.shared.log("App \(self.episodeId)", "Already have a cleanup task pending")
-                    return
-                }
-                let request = BGProcessingTaskRequest(identifier: cleanupTaskId)
-                request.requiresExternalPower = true
-                request.requiresNetworkConnectivity = false
-                
-                do {
-                    try BGTaskScheduler.shared.submit(request)
-                } catch let e {
-                    Logger.shared.log("App \(self.episodeId)", "Error submitting background task request: \(e)")
-                }
-            })
+            if registered {
+                BGTaskScheduler.shared.getPendingTaskRequests(completionHandler: { tasks in
+                    if tasks.contains(where: { $0.identifier == cleanupTaskId }) {
+                        Logger.shared.log("App \(self.episodeId)", "Already have a cleanup task pending")
+                        return
+                    }
+                    let request = BGProcessingTaskRequest(identifier: cleanupTaskId)
+                    request.requiresExternalPower = true
+                    request.requiresNetworkConnectivity = false
+
+                    do {
+                        try BGTaskScheduler.shared.submit(request)
+                    } catch let e {
+                        Logger.shared.log("App \(self.episodeId)", "Error submitting background task request: \(e)")
+                    }
+                })
+            }
         }
         
         let timestamp = Int(CFAbsoluteTimeGetCurrent())
@@ -1723,7 +1751,7 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
         }
         
         if #available(iOS 12.0, *) {
-            UIApplication.shared.registerForRemoteNotifications()
+            self.registerForRemoteNotificationsIfEntitled()
         }
         
         let _ = self.urlSession(identifier: self.backgroundSessionIdentifier)
@@ -3227,10 +3255,23 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
         })
     }
     
+    private func registerForRemoteNotificationsIfEntitled() {
+        guard BuildConfigExtra.hasAPNsEntitlement() else {
+            return
+        }
+        let _ = BuildConfigExtra.performSystemRegistration {
+            UIApplication.shared.registerForRemoteNotifications()
+            return true
+        }
+    }
+
     func requestNotificationTokenInvalidation() {
+        guard BuildConfigExtra.hasAPNsEntitlement() else {
+            return
+        }
         UIApplication.shared.unregisterForRemoteNotifications()
         DispatchQueue.main.asyncAfter(deadline: DispatchTime.now() + 1.0, execute: {
-            UIApplication.shared.registerForRemoteNotifications()
+            self.registerForRemoteNotificationsIfEntitled()
         })
     }
     
@@ -3253,7 +3294,11 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
             
             switch (settings.authorizationStatus, authorize) {
                 case (.authorized, _), (.notDetermined, true):
-                    var authorizationOptions: UNAuthorizationOptions = [.badge, .sound, .alert, .carPlay]
+                    let supportsCarPlay = BuildConfigExtra.applicationEntitlements()["com.apple.developer.carplay-messaging"] as? Bool == true
+                    var authorizationOptions: UNAuthorizationOptions = [.badge, .sound, .alert]
+                    if supportsCarPlay {
+                        authorizationOptions.insert(.carPlay)
+                    }
                     if #available(iOS 12.0, *) {
                         authorizationOptions.insert(.providesAppNotificationSettings)
                     }
@@ -3281,7 +3326,9 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
                                 }
                                 
                                 var carPlayOptions = options
-                                carPlayOptions.insert(.allowInCarPlay)
+                                if supportsCarPlay {
+                                    carPlayOptions.insert(.allowInCarPlay)
+                                }
                                 
                                 unknownMessageCategory = UNNotificationCategory(identifier: "unknown", actions: [], intentIdentifiers: [], hiddenPreviewsBodyPlaceholder: hiddenContentString, options: options)
                                 repliableMessageCategory = UNNotificationCategory(identifier: "r", actions: [reply], intentIdentifiers: [INSearchForMessagesIntentIdentifier], hiddenPreviewsBodyPlaceholder: hiddenContentString, options: carPlayOptions)
@@ -3309,8 +3356,7 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
                                     callUnlockVideoCategory
                                 ])
                                 
-                                Logger.shared.log("App \(self.episodeId)", "register for notifications: invoke registerForRemoteNotifications")
-                                UIApplication.shared.registerForRemoteNotifications()
+                                self.registerForRemoteNotificationsIfEntitled()
                             }
                         }
                     })
