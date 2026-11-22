@@ -84,11 +84,23 @@ jobs:
           PATCH
           printf '\nbuild --features=disable_legacy_signing --//Telegram:disableProvisioningProfiles --//Telegram:embedWatchApp=false\n' >> .bazelrc
           build_log="$RUNNER_TEMP/telegram-ipa-build.log"
-          if ! python3 build-system/Make/Make.py --cacheDir="$HOME/.cache/bazel" build \
-            --configurationPath=build-system/appstore-configuration.json \
-            --xcodeManagedCodesigning \
-            --buildNumber="$build_number" \
-            --configuration=release_arm64 2>&1 | tee "$build_log"; then
+          built=false
+          for attempt in 1 2 3; do
+            if python3 build-system/Make/Make.py --cacheDir="$HOME/.cache/bazel" build \
+              --configurationPath=build-system/appstore-configuration.json \
+              --xcodeManagedCodesigning \
+              --buildNumber="$build_number" \
+              --configuration=release_arm64 2>&1 | tee "$build_log"; then
+              built=true
+              break
+            fi
+            if [[ "$attempt" == 3 ]] || ! grep -Eq 'Failed to fetch registry file.*(Unknown host|Connection reset|timed out)' "$build_log"; then
+              break
+            fi
+            echo "::warning::Bazel registry request failed. Retrying the build."
+            sleep "$((attempt * 15))"
+          done
+          if [[ "$built" == false ]]; then
             python3 - "$build_log" <<'PY'
           import re
           import sys
