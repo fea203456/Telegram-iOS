@@ -82,11 +82,27 @@ jobs:
                            profile_artifact = provisioning_profile,
           PATCH
           printf '\nbuild --features=disable_legacy_signing --//Telegram:disableProvisioningProfiles --//Telegram:embedWatchApp=false\n' >> .bazelrc
-          python3 build-system/Make/Make.py --cacheDir="$HOME/.cache/bazel" build \
+          build_log="$RUNNER_TEMP/telegram-ipa-build.log"
+          if ! python3 build-system/Make/Make.py --cacheDir="$HOME/.cache/bazel" build \
             --configurationPath=build-system/appstore-configuration.json \
             --xcodeManagedCodesigning \
             --buildNumber="$build_number" \
-            --configuration=release_arm64
+            --configuration=release_arm64 2>&1 | tee "$build_log"; then
+            python3 - "$build_log" <<'PY'
+          import re
+          import sys
+
+          with open(sys.argv[1], errors="replace") as log:
+              errors = []
+              for line in log:
+                  line = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", line).strip()
+                  if (line.startswith("ERROR:") or ": error:" in line or "fatal error:" in line) and line not in errors:
+                      errors.append(line)
+              for error in errors[:12]:
+                  print("::error::" + error.replace("%", "%25"))
+          PY
+            exit 1
+          fi
 
           ipa="$RUNNER_TEMP/Telegram.ipa"
           cp bazel-bin/Telegram/Telegram.ipa "$ipa"
