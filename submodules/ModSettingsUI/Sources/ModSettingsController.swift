@@ -89,7 +89,7 @@ private struct Row: ItemListNodeEntry {
                 sectionId: self.section, style: .blocks, updated: self.toggle)
         case let .input(value, placeholder, number):
             return ItemListSingleLineInputItem(presentationData: presentationData, systemStyle: .glass,
-                title: self.title.isEmpty ? NSAttributedString() : NSAttributedString(string: self.title + "  "),
+                title: self.title.isEmpty ? NSAttributedString() : NSAttributedString(string: self.title + "  ", textColor: presentationData.theme.list.itemPrimaryTextColor),
                 text: value, placeholder: placeholder,
                 type: number ? .decimal : .regular(capitalization: false, autocorrection: false),
                 clearType: .always, maxLength: number ? 64 : 512, sectionId: self.section, textUpdated: self.edit,
@@ -471,7 +471,9 @@ public func presentModGiftPurchase(on controller: ViewController, context: Accou
     let cost: String
     switch currency {
     case .stars: cost = "\(price) Stars"
-    case .gram: cost = "\(Double(price) / 1_000_000_000) GRAM"
+    case .gram:
+        let amount = NSDecimalNumber(decimal: Decimal(price) / Decimal(1_000_000_000))
+        cost = "\(amount.stringValue) GRAM"
     }
     let alert = UIAlertController(title: title, message: "Добавить в свой профиль за \(cost) виртуального баланса?", preferredStyle: .alert)
     alert.addAction(UIAlertAction(title: "Отмена", style: .cancel))

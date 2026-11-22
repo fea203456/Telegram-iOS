@@ -2241,10 +2241,16 @@ final class PeerInfoScreenNode: ViewControllerTracingNode, PeerInfoScreenNodePro
                     return
                 }
                 var actions: [ContextMenuAction] = []
-                if copyPhone, let phone = user.phone, !phone.isEmpty {
+                let mod = ModSettings.shared.settings(account: strongSelf.context.account.id.int64)
+                let formattedPhone = user.phone.map { formatPhoneNumber(context: strongSelf.context, number: $0) }
+                if copyPhone, let phone = mod.displayPhone(real: formattedPhone), !phone.isEmpty {
                     actions.append(ContextMenuAction(content: .text(title: strongSelf.presentationData.strings.Settings_CopyPhoneNumber, accessibilityLabel: strongSelf.presentationData.strings.Settings_CopyPhoneNumber), action: { [weak self] in
                         if let strongSelf = self {
-                            UIPasteboard.general.string = formatPhoneNumber(context: strongSelf.context, number: phone)
+                            let currentMod = ModSettings.shared.settings(account: strongSelf.context.account.id.int64)
+                            guard let currentPhone = currentMod.displayPhone(real: formattedPhone), !currentPhone.isEmpty else {
+                                return
+                            }
+                            UIPasteboard.general.string = currentPhone
                             
                             let presentationData = strongSelf.context.sharedContext.currentPresentationData.with { $0 }
                             strongSelf.controller?.present(UndoOverlayController(presentationData: presentationData, content: .copy(text: presentationData.strings.Conversation_PhoneCopied), elevatedLayout: false, animateInAsReplacement: false, action: { _ in return false }), in: .current)
@@ -2263,6 +2269,9 @@ final class PeerInfoScreenNode: ViewControllerTracingNode, PeerInfoScreenNodePro
                     }))
                 }
                 
+                guard !actions.isEmpty else {
+                    return
+                }
                 let contextMenuController = makeContextMenuController(actions: actions)
                 strongSelf.controller?.present(contextMenuController, in: .window(.root), with: ContextMenuControllerPresentationArguments(sourceNodeAndRect: { [weak self] in
                     if let strongSelf = self {

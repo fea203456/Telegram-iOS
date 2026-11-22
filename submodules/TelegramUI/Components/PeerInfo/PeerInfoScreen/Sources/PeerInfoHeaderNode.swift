@@ -2859,7 +2859,7 @@ final class PeerInfoHeaderNode: ASDisplayNode {
             self.updateAvatarMask(transition: .immediate)
         }
         
-        if let mod, mod.bannerEnabled, let banner = mod.banner, !self.isSettings, !isMediaOnly, !state.isEditing {
+        if let mod, mod.bannerEnabled, let banner = mod.banner, self.isMyProfile, !isMediaOnly, !state.isEditing {
             let view: ModBannerView
             if let current = self.modBannerView {
                 view = current
